@@ -12,28 +12,20 @@
          moka-disable!
          moka-refresh-git!)
 
-(struct MokaSegment (content fg bg))
-(struct MokaSection (align segments))
+(struct MokaSegment (content fg bg bubble? gap))
+(struct MokaSection (align segments gap))
 
-(define (moka-segment content #:fg [fg 'auto] #:bg [bg 'auto])
-  (MokaSegment content fg bg))
+(define (moka-segment content #:fg [fg 'auto] #:bg [bg 'auto] #:bubble? [bubble? 'auto] #:gap [gap 2])
+  (MokaSegment content fg bg bubble? gap))
 
-(define (moka-section segments #:align [align 'left])
-  (MokaSection align segments))
+(define (moka-section segments #:align [align 'left] #:gap [gap 2])
+  (MokaSection align segments gap))
 
 (define *moka-row-offset* 2)
 (define *moka-transparent?* #t)
 (define *moka-sections* '())
 (define *moka-enabled?* #f)
 (define *moka-hooks-registered?* #f)
-
-;; render only reads these, never calls editor-focus directly (crashes helix)
-(define *moka-mode* "NOR")
-(define *moka-path* #f)
-(define *moka-dirty?* #f)
-(define *moka-lsp* "")
-(define *moka-line* 0)
-(define *moka-col* 0)
 
 (define *moka-git-branch* "")
 (define *moka-git-status-map* (hash))
@@ -48,6 +40,11 @@
         'dirty "#f9e2af"))
 
 (define *moka-colors* *moka-default-colors*)
+
+(define *moka-pill-left* "")
+(define *moka-pill-right* "")
+(define *moka-angle-left* "")
+(define *moka-angle-right* "")
 
 (define *moka-mode-insert* (string->editor-mode "insert"))
 (define *moka-mode-select* (string->editor-mode "select"))
@@ -64,7 +61,7 @@
 (define (moka-base-style)
   (if *moka-transparent?* (theme-scope-ref "ui.background") (theme-scope-ref "ui.statusline")))
 
-;; mode/git-branch default to a colored pill, everything else stays plain
+;; mode/git-branch get a colored fill by default
 (define (moka-default-bg content)
   (cond
     [(equal? content 'mode) (hash-try-get *moka-colors* 'mode-fallback-bg)]
@@ -88,21 +85,40 @@
 (define (moka-segment-fallback-fg segment)
   (moka-resolve (MokaSegment-fg segment) (moka-default-fg (MokaSegment-content segment))))
 
-;; no subprocess, safe on every keystroke
-(define (moka-refresh-fast!)
-  (define doc-id (editor->doc-id (editor-focus)))
-  (set! *moka-mode*
-        (cond
-          [(equal? (editor-mode) *moka-mode-insert*) "INS"]
-          [(equal? (editor-mode) *moka-mode-select*) "SEL"]
-          [else "NOR"]))
-  (set! *moka-path* (editor-document->path doc-id))
-  (set! *moka-dirty?* (editor-document-dirty? doc-id))
-  (set! *moka-lsp*
-        (let ([clients (get-active-lsp-clients)])
-          (if (null? clients) "" (string-join (map lsp-client-name clients) ", "))))
-  (set! *moka-line* (get-current-line-number))
-  (set! *moka-col* (get-current-column-number)))
+;; mode/git-branch default to round pills
+(define (moka-default-bubble? content)
+  (cond
+    [(equal? content 'mode) #t]
+    [(equal? content 'git-branch) #t]
+    [else #f]))
+
+(define (moka-segment-bubble? segment)
+  (moka-resolve (MokaSegment-bubble? segment) (moka-default-bubble? (MokaSegment-content segment))))
+
+;; caps only apply when bg is set
+(define (moka-segment-caps segment)
+  (define bg (moka-segment-bg segment))
+  (cond
+    [(not bg) #f]
+    [(equal? (moka-segment-bubble? segment) #t) (cons *moka-pill-left* *moka-pill-right*)]
+    [(equal? (moka-segment-bubble? segment) 'angled) (cons *moka-angle-left* *moka-angle-right*)]
+    [else #f]))
+
+;; read live, no caching
+(define (moka-current-mode)
+  (cond
+    [(equal? (editor-mode) *moka-mode-insert*) "INS"]
+    [(equal? (editor-mode) *moka-mode-select*) "SEL"]
+    [else "NOR"]))
+
+(define (moka-current-path)
+  (with-handler (lambda (_) #f) (cx->current-file)))
+
+(define (moka-current-dirty?)
+  (with-handler (lambda (_) #f) (editor-document-dirty? (editor->doc-id (editor-focus)))))
+
+(define (moka-current-lsp-names)
+  (with-handler (lambda (_) '()) (map lsp-client-name (get-active-lsp-clients))))
 
 (define (moka-git-repo? dir)
   (define proc
@@ -162,8 +178,8 @@
 
 ;; shells out to git, so only on save/open/focus, not every keystroke
 (define (moka-refresh-git!)
-  (define root (helix-find-workspace))
-  (if (moka-git-repo? root)
+  (define root (with-handler (lambda (_) #f) (helix-find-workspace)))
+  (if (and root (moka-git-repo? root))
       (begin
         (set! *moka-git-branch* (moka-read-branch root))
         (set! *moka-git-status-map* (moka-scan-git-status root)))
@@ -178,33 +194,36 @@
       (substring path (string-length prefix) (string-length path))
       path))
 
-(define (moka-current-git-status)
-  (if *moka-path* (hash-try-get *moka-git-status-map* (moka-relpath *moka-path*)) #f))
+(define (moka-current-git-status path)
+  (and path (hash-try-get *moka-git-status-map* (moka-relpath path))))
 
-(define (moka-mode-content) *moka-mode*)
+(define (moka-mode-content) (moka-current-mode))
 
 ;; each content from glyph uses their original colors
 (define (moka-file-content)
-  (if (not *moka-path*)
+  (define path (moka-current-path))
+  (if (not path)
       ""
-      (let* ([name (file-name *moka-path*)]
-             [status (moka-current-git-status)]
+      (let* ([name (file-name path)]
+             [status (moka-current-git-status path)]
              [base (list (cons (glyph-icon name) (glyph-color name)) (cons " " #f))]
              [with-status
               (if status
                   (append base (list (cons (glyph-git-icon status) (glyph-git-color status)) (cons " " #f)))
                   base)]
              [with-name (append with-status (list (cons name #f)))])
-        (if *moka-dirty?*
+        (if (moka-current-dirty?)
             (append with-name (list (cons " " #f) (cons "*" (hash-try-get *moka-colors* 'dirty))))
             with-name))))
 
 (define (moka-git-branch-content) *moka-git-branch*)
 
-(define (moka-lsp-content) *moka-lsp*)
+(define (moka-lsp-content) (string-join (moka-current-lsp-names) ", "))
 
 (define (moka-position-content)
-  (string-append (number->string (+ 1 *moka-line*)) ":" (number->string (+ 1 *moka-col*))))
+  (string-append (number->string (+ 1 (get-current-line-number)))
+                  ":"
+                  (number->string (+ 1 (get-current-column-number)))))
 
 (define (moka-spacer-content) " ")
 (define (moka-separator-content) "|")
@@ -238,7 +257,7 @@
   (string-join (map car (moka-segment-runs segment)) ""))
 
 (define (moka-segment-width segment)
-  (string-length (moka-segment-text segment)))
+  (+ (string-length (moka-segment-text segment)) (if (moka-segment-caps segment) 2 0)))
 
 (define (moka-sections-for align)
   (filter (lambda (sec) (equal? (MokaSection-align sec) align)) *moka-sections*))
@@ -246,44 +265,67 @@
 (define (moka-section-segments-nonempty section)
   (filter (lambda (seg) (> (moka-segment-width seg) 0)) (MokaSection-segments section)))
 
+;; adds gap-of after every item except last section
+(define (moka-sum-with-gaps items width-of gap-of)
+  (if (null? items)
+      0
+      (let loop ([xs items] [total 0])
+        (if (null? (cdr xs))
+            (+ total (width-of (car xs)))
+            (loop (cdr xs) (+ total (width-of (car xs)) (gap-of (car xs))))))))
+
 (define (moka-section-width section)
-  (define segs (moka-section-segments-nonempty section))
-  (if (null? segs) 0 (+ (apply + (map moka-segment-width segs)) (* 2 (- (length segs) 1)))))
+  (moka-sum-with-gaps (moka-section-segments-nonempty section) moka-segment-width MokaSegment-gap))
 
 (define (moka-sections-nonempty align)
   (filter (lambda (sec) (> (moka-section-width sec) 0)) (moka-sections-for align)))
 
 (define (moka-align-width align)
-  (define secs (moka-sections-nonempty align))
-  (if (null? secs) 0 (+ (apply + (map moka-section-width secs)) (* 2 (- (length secs) 1)))))
+  (moka-sum-with-gaps (moka-sections-nonempty align) moka-section-width MokaSection-gap))
 
-;; bg is shared across the whole segment (the "pill"), fg is per-fragment
+;; bg/caps are per-segment, fg is per-fragment
 (define (moka-draw-segment! frame x y segment base-style)
   (define bg (moka-segment-bg segment))
   (define bg-style (if bg (style-bg base-style (glyph-hex->color bg)) base-style))
-  (let loop ([runs (moka-segment-runs segment)] [cx x])
-    (if (null? runs)
-        cx
-        (let* ([run (car runs)]
-               [text (car run)]
-               [fg (cdr run)]
-               [run-style (if fg (style-fg bg-style (glyph-hex->color fg)) bg-style)])
-          (frame-set-string! frame cx y text run-style)
-          (loop (cdr runs) (+ cx (string-length text)))))))
+  (define caps (moka-segment-caps segment))
+  (define cap-style (if bg (style-fg base-style (glyph-hex->color bg)) base-style))
+  (define start-x
+    (if caps
+        (begin
+          (frame-set-string! frame x y (car caps) cap-style)
+          (+ x 1))
+        x))
+  (define end-x
+    (let loop ([runs (moka-segment-runs segment)] [cx start-x])
+      (if (null? runs)
+          cx
+          (let* ([run (car runs)]
+                 [text (car run)]
+                 [fg (cdr run)]
+                 [run-style (if fg (style-fg bg-style (glyph-hex->color fg)) bg-style)])
+            (frame-set-string! frame cx y text run-style)
+            (loop (cdr runs) (+ cx (string-length text)))))))
+  (if caps
+      (begin
+        (frame-set-string! frame end-x y (cdr caps) cap-style)
+        (+ end-x 1))
+      end-x))
 
 (define (moka-draw-section! frame x y section base-style)
   (let loop ([segs (moka-section-segments-nonempty section)] [cx x])
     (if (null? segs)
         cx
-        (let ([next-cx (moka-draw-segment! frame cx y (car segs) base-style)])
-          (if (null? (cdr segs)) next-cx (loop (cdr segs) (+ next-cx 2)))))))
+        (let* ([seg (car segs)]
+               [next-cx (moka-draw-segment! frame cx y seg base-style)])
+          (if (null? (cdr segs)) next-cx (loop (cdr segs) (+ next-cx (MokaSegment-gap seg))))))))
 
 (define (moka-draw-align! frame x y align base-style)
   (let loop ([secs (moka-sections-nonempty align)] [cx x])
     (if (null? secs)
         cx
-        (let ([next-cx (moka-draw-section! frame cx y (car secs) base-style)])
-          (if (null? (cdr secs)) next-cx (loop (cdr secs) (+ next-cx 2)))))))
+        (let* ([sec (car secs)]
+               [next-cx (moka-draw-section! frame cx y sec base-style)])
+          (if (null? (cdr secs)) next-cx (loop (cdr secs) (+ next-cx (MokaSection-gap sec))))))))
 
 (define (moka-render-bar state rect frame)
   (define width (area-width rect))
@@ -309,34 +351,16 @@
 
 (define (moka-register-hooks!)
   (unless *moka-hooks-registered?*
-    (register-hook 'post-command (lambda (name) (moka-refresh-fast!)))
-    (register-hook 'post-insert-char (lambda (ch) (moka-refresh-fast!)))
-    (register-hook 'on-mode-switch (lambda (ev) (moka-refresh-fast!)))
-    (register-hook 'selection-did-change (lambda (view-id) (moka-refresh-fast!)))
-    (register-hook 'document-opened
-                    (lambda (doc-id)
-                      (moka-refresh-fast!)
-                      (moka-refresh-git!)))
-    (register-hook 'document-saved
-                    (lambda (doc-id)
-                      (moka-refresh-fast!)
-                      (moka-refresh-git!)))
-    (register-hook 'terminal-focus-gained
-                    (lambda ()
-                      (moka-refresh-fast!)
-                      (moka-refresh-git!)))
+    (register-hook 'document-saved (lambda (doc-id) (moka-refresh-git!)))
+    (register-hook 'document-opened (lambda (doc-id) (moka-refresh-git!)))
+    (register-hook 'terminal-focus-gained (lambda () (moka-refresh-git!)))
     (set! *moka-hooks-registered?* #t)))
 
 (define (moka-enable!)
   (unless *moka-enabled?*
     (moka-blank-native-statusline!)
     (moka-register-hooks!)
-    ;; tree isn't ready yet while init.scm is still loading
-    (enqueue-thread-local-callback-with-delay
-     50
-     (lambda ()
-       (moka-refresh-fast!)
-       (moka-refresh-git!)))
+    (moka-refresh-git!)
     (push-component!
      (new-component! "moka" #f moka-render-bar (hash "cursor" moka-cursor-handler)))
     (set! *moka-enabled?* #t)))
