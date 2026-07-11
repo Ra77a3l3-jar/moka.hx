@@ -3,6 +3,7 @@
 (require "helix/misc.scm")
 (require "helix/editor.scm")
 (require "helix/static.scm")
+(require "helix/commands.scm")
 (require "glyph/glyph.scm")
 
 (provide moka-segment
@@ -23,7 +24,6 @@
 
 (define *moka-row-offset* 2)
 (define *moka-transparent?* #t)
-(define *moka-sections* '())
 (define *moka-enabled?* #f)
 (define *moka-hooks-registered?* #f)
 
@@ -49,28 +49,55 @@
 (define *moka-mode-insert* (string->editor-mode "insert"))
 (define *moka-mode-select* (string->editor-mode "select"))
 
+(define *moka-mode-labels* (hash 'normal "NOR" 'insert "INS" 'select "SEL"))
+
+(define (moka-mode-label)
+  (cond
+    [(equal? (editor-mode) *moka-mode-insert*) (hash-try-get *moka-mode-labels* 'insert)]
+    [(equal? (editor-mode) *moka-mode-select*) (hash-try-get *moka-mode-labels* 'select)]
+    [else (hash-try-get *moka-mode-labels* 'normal)]))
+
+(define (moka-mode-scope)
+  (cond
+    [(equal? (editor-mode) *moka-mode-insert*) "ui.statusline.insert"]
+    [(equal? (editor-mode) *moka-mode-select*) "ui.statusline.select"]
+    [else "ui.statusline.normal"]))
+
+(define *moka-default-sections*
+  (list (moka-section (list (moka-segment 'mode) (moka-segment 'file)) #:align 'left)
+        (moka-section (list (moka-segment 'lsp) (moka-segment 'git-branch) (moka-segment 'position))
+                       #:align 'right)))
+
+(define *moka-sections* *moka-default-sections*)
+
 (define (moka-configure! #:row-offset [row-offset 2]
                           #:transparent? [transparent? #t]
-                          #:sections [sections '()]
-                          #:colors [colors *moka-default-colors*])
+                          #:sections [sections *moka-default-sections*]
+                          #:colors [colors *moka-default-colors*]
+                          #:mode-normal [mode-normal "NOR"]
+                          #:mode-insert [mode-insert "INS"]
+                          #:mode-select [mode-select "SEL"])
   (set! *moka-row-offset* row-offset)
   (set! *moka-transparent?* transparent?)
   (set! *moka-sections* sections)
-  (set! *moka-colors* colors))
+  (set! *moka-colors* colors)
+  (set! *moka-mode-labels* (hash 'normal mode-normal 'insert mode-insert 'select mode-select)))
 
 (define (moka-base-style)
   (if *moka-transparent?* (theme-scope-ref "ui.background") (theme-scope-ref "ui.statusline")))
 
-;; mode/git-branch get a colored fill by default
+;; 'mode prefers theme colors over the hash
 (define (moka-default-bg content)
   (cond
-    [(equal? content 'mode) (hash-try-get *moka-colors* 'mode-fallback-bg)]
+    [(equal? content 'mode)
+     (or (style->bg (theme-scope-ref (moka-mode-scope))) (hash-try-get *moka-colors* 'mode-fallback-bg))]
     [(equal? content 'git-branch) (hash-try-get *moka-colors* 'git-branch-bg)]
     [else #f]))
 
 (define (moka-default-fg content)
   (cond
-    [(equal? content 'mode) (hash-try-get *moka-colors* 'mode-fallback-fg)]
+    [(equal? content 'mode)
+     (or (style->fg (theme-scope-ref (moka-mode-scope))) (hash-try-get *moka-colors* 'mode-fallback-fg))]
     [(equal? content 'git-branch) (hash-try-get *moka-colors* 'git-branch-fg)]
     [(equal? content 'lsp) (hash-try-get *moka-colors* 'lsp)]
     [(equal? content 'position) (hash-try-get *moka-colors* 'position)]
@@ -78,6 +105,10 @@
 
 (define (moka-resolve value default)
   (if (equal? value 'auto) default value))
+
+;; hex string or already-built Color?
+(define (moka-to-color value)
+  (if (string? value) (glyph-hex->color value) value))
 
 (define (moka-segment-bg segment)
   (moka-resolve (MokaSegment-bg segment) (moka-default-bg (MokaSegment-content segment))))
@@ -105,12 +136,6 @@
     [else #f]))
 
 ;; read live, no caching
-(define (moka-current-mode)
-  (cond
-    [(equal? (editor-mode) *moka-mode-insert*) "INS"]
-    [(equal? (editor-mode) *moka-mode-select*) "SEL"]
-    [else "NOR"]))
-
 (define (moka-current-path)
   (with-handler (lambda (_) #f) (cx->current-file)))
 
@@ -121,20 +146,24 @@
   (with-handler (lambda (_) '()) (map lsp-client-name (get-active-lsp-clients))))
 
 (define (moka-git-repo? dir)
-  (define proc
-    (~> (command "git" (list "-C" dir "rev-parse" "--is-inside-work-tree"))
-        with-stdout-piped
-        with-stderr-piped
-        spawn-process))
-  (and (Ok? proc) (equal? (trim (read-port-to-string (child-stdout (Ok->value proc)))) "true")))
+  (with-handler
+    (lambda (_) #f)
+    (define proc
+      (~> (command "git" (list "-C" dir "rev-parse" "--is-inside-work-tree"))
+          with-stdout-piped
+          with-stderr-piped
+          spawn-process))
+    (and (Ok? proc) (equal? (trim (read-port-to-string (child-stdout (Ok->value proc)))) "true"))))
 
 (define (moka-read-branch dir)
-  (define proc
-    (~> (command "git" (list "-C" dir "rev-parse" "--abbrev-ref" "HEAD"))
-        with-stdout-piped
-        with-stderr-piped
-        spawn-process))
-  (if (Ok? proc) (trim (read-port-to-string (child-stdout (Ok->value proc)))) ""))
+  (with-handler
+    (lambda (_) "")
+    (define proc
+      (~> (command "git" (list "-C" dir "rev-parse" "--abbrev-ref" "HEAD"))
+          with-stdout-piped
+          with-stderr-piped
+          spawn-process))
+    (if (Ok? proc) (trim (read-port-to-string (child-stdout (Ok->value proc)))) "")))
 
 (define (moka-git-status-symbol code)
   (define x (string-ref code 0))
@@ -165,16 +194,18 @@
                 (loop (cdr ls) (if sym (hash-insert statuses path sym) statuses))))))))
 
 (define (moka-scan-git-status root)
-  (define proc
-    (~> (command "git" (list "-C" root "status" "--porcelain"))
-        with-stdout-piped
-        with-stderr-piped
-        spawn-process))
-  (if (Ok? proc)
-      (let* ([output (read-port-to-string (child-stdout (Ok->value proc)))]
-             [lines (filter (lambda (l) (> (string-length l) 0)) (split-many output "\n"))])
-        (moka-parse-status-lines lines))
-      (hash)))
+  (with-handler
+    (lambda (_) (hash))
+    (define proc
+      (~> (command "git" (list "-C" root "status" "--porcelain"))
+          with-stdout-piped
+          with-stderr-piped
+          spawn-process))
+    (if (Ok? proc)
+        (let* ([output (read-port-to-string (child-stdout (Ok->value proc)))]
+               [lines (filter (lambda (l) (> (string-length l) 0)) (split-many output "\n"))])
+          (moka-parse-status-lines lines))
+        (hash))))
 
 ;; shells out to git, so only on save/open/focus, not every keystroke
 (define (moka-refresh-git!)
@@ -185,7 +216,8 @@
         (set! *moka-git-status-map* (moka-scan-git-status root)))
       (begin
         (set! *moka-git-branch* "")
-        (set! *moka-git-status-map* (hash)))))
+        (set! *moka-git-status-map* (hash))))
+  (redraw))
 
 (define (moka-relpath path)
   (define prefix (string-append (helix-find-workspace) (path-separator)))
@@ -197,9 +229,9 @@
 (define (moka-current-git-status path)
   (and path (hash-try-get *moka-git-status-map* (moka-relpath path))))
 
-(define (moka-mode-content) (moka-current-mode))
+(define (moka-mode-content) (moka-mode-label))
 
-;; each content from glyph uses their original colors
+;; icon/status/name keep their own color
 (define (moka-file-content)
   (define path (moka-current-path))
   (if (not path)
@@ -248,10 +280,14 @@
       [else ""]))
   (if (string? raw) (list (cons raw #f)) raw))
 
-;; fragments without their own inherent color fall back to the segment's #:fg
+;; bg sets one uniform fg, else each fragment keeps its own
 (define (moka-segment-runs segment)
-  (define fallback-fg (moka-segment-fallback-fg segment))
-  (map (lambda (frag) (cons (car frag) (or (cdr frag) fallback-fg))) (moka-content-fragments segment)))
+  (define bg (moka-segment-bg segment))
+  (define fallback-fg (or (moka-segment-fallback-fg segment) (and bg "#1e1e2e")))
+  (define fragments (moka-content-fragments segment))
+  (if bg
+      (map (lambda (frag) (cons (car frag) fallback-fg)) fragments)
+      (map (lambda (frag) (cons (car frag) (or (cdr frag) fallback-fg))) fragments)))
 
 (define (moka-segment-text segment)
   (string-join (map car (moka-segment-runs segment)) ""))
@@ -262,8 +298,9 @@
 (define (moka-sections-for align)
   (filter (lambda (sec) (equal? (MokaSection-align sec) align)) *moka-sections*))
 
+;; caps alone don't count as content, drop segments with no actual text
 (define (moka-section-segments-nonempty section)
-  (filter (lambda (seg) (> (moka-segment-width seg) 0)) (MokaSection-segments section)))
+  (filter (lambda (seg) (not (equal? (moka-segment-text seg) ""))) (MokaSection-segments section)))
 
 ;; adds gap-of after every item except last section
 (define (moka-sum-with-gaps items width-of gap-of)
@@ -286,9 +323,9 @@
 ;; bg/caps are per-segment, fg is per-fragment
 (define (moka-draw-segment! frame x y segment base-style)
   (define bg (moka-segment-bg segment))
-  (define bg-style (if bg (style-bg base-style (glyph-hex->color bg)) base-style))
+  (define bg-style (if bg (style-bg base-style (moka-to-color bg)) base-style))
   (define caps (moka-segment-caps segment))
-  (define cap-style (if bg (style-fg base-style (glyph-hex->color bg)) base-style))
+  (define cap-style (if bg (style-fg base-style (moka-to-color bg)) base-style))
   (define start-x
     (if caps
         (begin
@@ -302,7 +339,7 @@
           (let* ([run (car runs)]
                  [text (car run)]
                  [fg (cdr run)]
-                 [run-style (if fg (style-fg bg-style (glyph-hex->color fg)) bg-style)])
+                 [run-style (if fg (style-fg bg-style (moka-to-color fg)) bg-style)])
             (frame-set-string! frame cx y text run-style)
             (loop (cdr runs) (+ cx (string-length text)))))))
   (if caps
