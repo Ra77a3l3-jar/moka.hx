@@ -11,7 +11,11 @@
          moka-configure!
          moka-enable!
          moka-disable!
-         moka-refresh-git!)
+         moka-refresh-git!
+         moka-buffer-style
+         moka-bufferline-configure!
+         moka-bufferline-enable!
+         moka-bufferline-disable!)
 
 (struct MokaSegment (content fg bg bubble? gap))
 (struct MokaSection (align segments gap))
@@ -110,6 +114,55 @@
 (define (moka-to-color value)
   (if (string? value) (glyph-hex->color value) value))
 
+(define (moka-caps-for bg bubble?)
+  (cond
+    [(not bg) #f]
+    [(equal? bubble? #t) (cons *moka-pill-left* *moka-pill-right*)]
+    [(equal? bubble? 'angled) (cons *moka-angle-left* *moka-angle-right*)]
+    [else #f]))
+
+(define (moka-runs-for fragments bg fallback-fg)
+  (define fg (or fallback-fg (and bg "#1e1e2e")))
+  (if bg
+      (map (lambda (frag) (cons (car frag) fg)) fragments)
+      (map (lambda (frag) (cons (car frag) (or (cdr frag) fg))) fragments)))
+
+(define (moka-fragments-text fragments)
+  (string-join (map car fragments) ""))
+
+(define (moka-pad-fragments fragments bg)
+  (if bg (append (list (cons " " #f)) fragments (list (cons " " #f))) fragments))
+
+(define (moka-styled-width fragments bg bubble?)
+  (+ (string-length (moka-fragments-text (moka-pad-fragments fragments bg)))
+     (if (moka-caps-for bg bubble?) 2 0)))
+
+(define (moka-draw-styled! frame x y fragments bg bubble? fallback-fg base-style)
+  (define bg-style (if bg (style-bg base-style (moka-to-color bg)) base-style))
+  (define caps (moka-caps-for bg bubble?))
+  (define cap-style (if bg (style-fg base-style (moka-to-color bg)) base-style))
+  (define start-x
+    (if caps
+        (begin
+          (frame-set-string! frame x y (car caps) cap-style)
+          (+ x 1))
+        x))
+  (define end-x
+    (let loop ([runs (moka-runs-for (moka-pad-fragments fragments bg) bg fallback-fg)] [cx start-x])
+      (if (null? runs)
+          cx
+          (let* ([run (car runs)]
+                 [text (car run)]
+                 [fg (cdr run)]
+                 [run-style (if fg (style-fg bg-style (moka-to-color fg)) bg-style)])
+            (frame-set-string! frame cx y text run-style)
+            (loop (cdr runs) (+ cx (string-length text)))))))
+  (if caps
+      (begin
+        (frame-set-string! frame end-x y (cdr caps) cap-style)
+        (+ end-x 1))
+      end-x))
+
 (define (moka-segment-bg segment)
   (moka-resolve (MokaSegment-bg segment) (moka-default-bg (MokaSegment-content segment))))
 
@@ -125,15 +178,6 @@
 
 (define (moka-segment-bubble? segment)
   (moka-resolve (MokaSegment-bubble? segment) (moka-default-bubble? (MokaSegment-content segment))))
-
-;; caps only apply when bg is set
-(define (moka-segment-caps segment)
-  (define bg (moka-segment-bg segment))
-  (cond
-    [(not bg) #f]
-    [(equal? (moka-segment-bubble? segment) #t) (cons *moka-pill-left* *moka-pill-right*)]
-    [(equal? (moka-segment-bubble? segment) 'angled) (cons *moka-angle-left* *moka-angle-right*)]
-    [else #f]))
 
 ;; read live, no caching
 (define (moka-current-path)
@@ -280,20 +324,11 @@
       [else ""]))
   (if (string? raw) (list (cons raw #f)) raw))
 
-;; bg sets one uniform fg, else each fragment keeps its own
-(define (moka-segment-runs segment)
-  (define bg (moka-segment-bg segment))
-  (define fallback-fg (or (moka-segment-fallback-fg segment) (and bg "#1e1e2e")))
-  (define fragments (moka-content-fragments segment))
-  (if bg
-      (map (lambda (frag) (cons (car frag) fallback-fg)) fragments)
-      (map (lambda (frag) (cons (car frag) (or (cdr frag) fallback-fg))) fragments)))
-
 (define (moka-segment-text segment)
-  (string-join (map car (moka-segment-runs segment)) ""))
+  (moka-fragments-text (moka-content-fragments segment)))
 
 (define (moka-segment-width segment)
-  (+ (string-length (moka-segment-text segment)) (if (moka-segment-caps segment) 2 0)))
+  (moka-styled-width (moka-content-fragments segment) (moka-segment-bg segment) (moka-segment-bubble? segment)))
 
 (define (moka-sections-for align)
   (filter (lambda (sec) (equal? (MokaSection-align sec) align)) *moka-sections*))
@@ -320,33 +355,15 @@
 (define (moka-align-width align)
   (moka-sum-with-gaps (moka-sections-nonempty align) moka-section-width MokaSection-gap))
 
-;; bg/caps are per-segment, fg is per-fragment
 (define (moka-draw-segment! frame x y segment base-style)
-  (define bg (moka-segment-bg segment))
-  (define bg-style (if bg (style-bg base-style (moka-to-color bg)) base-style))
-  (define caps (moka-segment-caps segment))
-  (define cap-style (if bg (style-fg base-style (moka-to-color bg)) base-style))
-  (define start-x
-    (if caps
-        (begin
-          (frame-set-string! frame x y (car caps) cap-style)
-          (+ x 1))
-        x))
-  (define end-x
-    (let loop ([runs (moka-segment-runs segment)] [cx start-x])
-      (if (null? runs)
-          cx
-          (let* ([run (car runs)]
-                 [text (car run)]
-                 [fg (cdr run)]
-                 [run-style (if fg (style-fg bg-style (moka-to-color fg)) bg-style)])
-            (frame-set-string! frame cx y text run-style)
-            (loop (cdr runs) (+ cx (string-length text)))))))
-  (if caps
-      (begin
-        (frame-set-string! frame end-x y (cdr caps) cap-style)
-        (+ end-x 1))
-      end-x))
+  (moka-draw-styled! frame
+                      x
+                      y
+                      (moka-content-fragments segment)
+                      (moka-segment-bg segment)
+                      (moka-segment-bubble? segment)
+                      (moka-segment-fallback-fg segment)
+                      base-style))
 
 (define (moka-draw-section! frame x y section base-style)
   (let loop ([segs (moka-section-segments-nonempty section)] [cx x])
@@ -407,3 +424,148 @@
     (pop-last-component-by-name! "moka")
     (moka-restore-native-statusline!)
     (set! *moka-enabled?* #f)))
+
+(struct MokaBufferStyle (fg bg bubble?))
+
+(define (moka-buffer-style #:fg [fg 'auto] #:bg [bg 'auto] #:bubble? [bubble? 'auto])
+  (MokaBufferStyle fg bg bubble?))
+
+(define *moka-bufferline-enabled?* #f)
+(define *moka-bufferline-hooks-registered?* #f)
+(define *moka-bufferline-mode* 'multiple)
+(define *moka-bufferline-row-offset* 0)
+(define *moka-bufferline-gap* 1)
+(define *moka-bufferline-show-icons?* #t)
+(define *moka-bufferline-show-dirty?* #t)
+(define *moka-bufferline-dirty-color* "#f9e2af")
+(define *moka-bufferline-clickable?* #t)
+(define *moka-bufferline-active-style* (moka-buffer-style #:bg "#89b4fa" #:fg "#1e1e2e" #:bubble? #t))
+(define *moka-bufferline-inactive-style* (moka-buffer-style))
+
+(define *moka-bufferline-tabs* '())
+
+;; #:mode mirrors helix's own buferline settings never/always/multiple
+(define (moka-bufferline-configure! #:row-offset [row-offset 0]
+                                     #:mode [mode 'multiple]
+                                     #:active [active (moka-buffer-style #:bg "#89b4fa"
+                                                                          #:fg "#1e1e2e"
+                                                                          #:bubble? #t)]
+                                     #:inactive [inactive (moka-buffer-style)]
+                                     #:gap [gap 1]
+                                     #:icons? [icons? #t]
+                                     #:dirty? [dirty? #t]
+                                     #:dirty-color [dirty-color "#f9e2af"]
+                                     #:clickable? [clickable? #t])
+  (set! *moka-bufferline-row-offset* row-offset)
+  (set! *moka-bufferline-mode* mode)
+  (set! *moka-bufferline-active-style* active)
+  (set! *moka-bufferline-inactive-style* inactive)
+  (set! *moka-bufferline-gap* gap)
+  (set! *moka-bufferline-show-icons?* icons?)
+  (set! *moka-bufferline-show-dirty?* dirty?)
+  (set! *moka-bufferline-dirty-color* dirty-color)
+  (set! *moka-bufferline-clickable?* clickable?))
+
+(define (moka-bufferline-style-for active?)
+  (if active? *moka-bufferline-active-style* *moka-bufferline-inactive-style*))
+
+(define (moka-bufferline-tab-bg style) (moka-resolve (MokaBufferStyle-bg style) #f))
+(define (moka-bufferline-tab-fg style) (moka-resolve (MokaBufferStyle-fg style) #f))
+(define (moka-bufferline-tab-bubble? style) (moka-resolve (MokaBufferStyle-bubble? style) #f))
+
+(define (moka-bufferline-doc-fragments doc-id)
+  (define path (with-handler (lambda (_) #f) (editor-document->path doc-id)))
+  (define name (if path (file-name path) "[scratch]"))
+  (define icon-frag
+    (if (and *moka-bufferline-show-icons?* path)
+        (list (cons (glyph-icon name) (glyph-color name)) (cons " " #f))
+        '()))
+  (define dirty? (and *moka-bufferline-show-dirty?* (with-handler (lambda (_) #f) (editor-document-dirty? doc-id))))
+  (define dirty-frag (if dirty? (list (cons " " #f) (cons "*" *moka-bufferline-dirty-color*)) '()))
+  (append icon-frag (list (cons name #f)) dirty-frag))
+
+(define (moka-bufferline-docs)
+  (with-handler (lambda (_) '()) (editor-all-documents)))
+
+(define (moka-bufferline-focused-doc-id)
+  (with-handler (lambda (_) #f) (editor->doc-id (editor-focus))))
+
+(define (moka-bufferline-visible?)
+  (cond
+    [(equal? *moka-bufferline-mode* 'never) #f]
+    [(equal? *moka-bufferline-mode* 'always) #t]
+    [else (> (length (moka-bufferline-docs)) 1)]))
+
+;; syncs the reserved top row from hooks
+(define (moka-bufferline-sync-clip!)
+  (set-editor-clip-top! (if (moka-bufferline-visible?) (+ *moka-bufferline-row-offset* 1) 0)))
+
+;; draws nothing if bufferline set to hidden
+(define (moka-render-bufferline state rect frame)
+  (when (moka-bufferline-visible?)
+    (define width (area-width rect))
+    (define y *moka-bufferline-row-offset*)
+    (define base-style (moka-base-style))
+    (buffer/clear-with frame (area 0 y width 1) base-style)
+    (define focused (moka-bufferline-focused-doc-id))
+    (let loop ([docs (moka-bufferline-docs)] [cx 0] [tabs '()])
+      (if (null? docs)
+          (set! *moka-bufferline-tabs* (reverse tabs))
+          (let* ([doc-id (car docs)]
+                 [style (moka-bufferline-style-for (equal? doc-id focused))]
+                 [fragments (moka-bufferline-doc-fragments doc-id)]
+                 [start-x cx]
+                 [end-x
+                  (moka-draw-styled! frame
+                                      cx
+                                      y
+                                      fragments
+                                      (moka-bufferline-tab-bg style)
+                                      (moka-bufferline-tab-bubble? style)
+                                      (moka-bufferline-tab-fg style)
+                                      base-style)])
+            (loop (cdr docs) (+ end-x *moka-bufferline-gap*) (cons (list doc-id start-x end-x) tabs)))))))
+
+(define (moka-bufferline-cursor-handler state rect) #f)
+
+(define (moka-bufferline-tab-at col)
+  (define hit (filter (lambda (tab) (and (>= col (cadr tab)) (< col (caddr tab)))) *moka-bufferline-tabs*))
+  (if (null? hit) #f (car (car hit))))
+
+(define (moka-bufferline-handle-event state event)
+  (if (and *moka-bufferline-clickable?* (mouse-event? event) (equal? (event-mouse-kind event) 0)
+           (equal? (event-mouse-row event) *moka-bufferline-row-offset*))
+      (let ([doc-id (moka-bufferline-tab-at (event-mouse-col event))])
+        (when doc-id
+          (with-handler (lambda (_) #f) (editor-switch-action! doc-id Action/Replace)))
+        event-result/consume)
+      event-result/ignore))
+
+(define (moka-bufferline-register-hooks!)
+  (unless *moka-bufferline-hooks-registered?*
+    (register-hook 'document-opened (lambda (doc-id) (moka-bufferline-sync-clip!)))
+    (register-hook 'document-closed (lambda (closed-event) (moka-bufferline-sync-clip!)))
+    (set! *moka-bufferline-hooks-registered?* #t)))
+
+;; deactive helix default bufferline
+(define (moka-bufferline-blank-native!)
+  (with-handler (lambda (_) #f) (bufferline "never")))
+
+(define (moka-bufferline-enable!)
+  (unless *moka-bufferline-enabled?*
+    (moka-bufferline-blank-native!)
+    (moka-bufferline-register-hooks!)
+    (moka-bufferline-sync-clip!)
+    (push-component!
+     (new-component! "moka-bufferline"
+                      #f
+                      moka-render-bufferline
+                      (hash "cursor" moka-bufferline-cursor-handler
+                            "handle_event" moka-bufferline-handle-event)))
+    (set! *moka-bufferline-enabled?* #t)))
+
+(define (moka-bufferline-disable!)
+  (when *moka-bufferline-enabled?*
+    (pop-last-component-by-name! "moka-bufferline")
+    (set-editor-clip-top! 0)
+    (set! *moka-bufferline-enabled?* #f)))
