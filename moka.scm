@@ -107,8 +107,8 @@
     [(equal? content 'position) (hash-try-get *moka-colors* 'position)]
     [else #f]))
 
-(define (moka-resolve value default)
-  (if (equal? value 'auto) default value))
+(define (moka-resolve value default-thunk)
+  (if (equal? value 'auto) (default-thunk) value))
 
 ;; hex string or already-built Color?
 (define (moka-to-color value)
@@ -164,10 +164,10 @@
       end-x))
 
 (define (moka-segment-bg segment)
-  (moka-resolve (MokaSegment-bg segment) (moka-default-bg (MokaSegment-content segment))))
+  (moka-resolve (MokaSegment-bg segment) (lambda () (moka-default-bg (MokaSegment-content segment)))))
 
 (define (moka-segment-fallback-fg segment)
-  (moka-resolve (MokaSegment-fg segment) (moka-default-fg (MokaSegment-content segment))))
+  (moka-resolve (MokaSegment-fg segment) (lambda () (moka-default-fg (MokaSegment-content segment)))))
 
 ;; mode/git-branch default to round pills
 (define (moka-default-bubble? content)
@@ -177,7 +177,7 @@
     [else #f]))
 
 (define (moka-segment-bubble? segment)
-  (moka-resolve (MokaSegment-bubble? segment) (moka-default-bubble? (MokaSegment-content segment))))
+  (moka-resolve (MokaSegment-bubble? segment) (lambda () (moka-default-bubble? (MokaSegment-content segment)))))
 
 ;; read live, no caching
 (define (moka-current-path)
@@ -469,9 +469,9 @@
 (define (moka-bufferline-style-for active?)
   (if active? *moka-bufferline-active-style* *moka-bufferline-inactive-style*))
 
-(define (moka-bufferline-tab-bg style) (moka-resolve (MokaBufferStyle-bg style) #f))
-(define (moka-bufferline-tab-fg style) (moka-resolve (MokaBufferStyle-fg style) #f))
-(define (moka-bufferline-tab-bubble? style) (moka-resolve (MokaBufferStyle-bubble? style) #f))
+(define (moka-bufferline-tab-bg style) (moka-resolve (MokaBufferStyle-bg style) (lambda () #f)))
+(define (moka-bufferline-tab-fg style) (moka-resolve (MokaBufferStyle-fg style) (lambda () #f)))
+(define (moka-bufferline-tab-bubble? style) (moka-resolve (MokaBufferStyle-bubble? style) (lambda () #f)))
 
 (define (moka-bufferline-doc-fragments doc-id)
   (define path (with-handler (lambda (_) #f) (editor-document->path doc-id)))
