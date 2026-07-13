@@ -15,7 +15,9 @@
          moka-buffer-style
          moka-bufferline-configure!
          moka-bufferline-enable!
-         moka-bufferline-disable!)
+         moka-bufferline-disable!
+         moka-reserved-top
+         moka-reserved-bottom)
 
 (struct MokaSegment (content fg bg bubble? gap))
 (struct MokaSection (align segments gap))
@@ -384,8 +386,14 @@
 (define (moka-render-bar state rect frame)
   (define width (area-width rect))
   (define height (area-height rect))
-  (define y (- height *moka-row-offset*))
+  ;; clamped so offset 0 can't land off-screen
+  (define y (max 0 (min (- height 1) (- height *moka-row-offset*))))
   (define base-style (moka-base-style))
+  ;; the blanked native statusline still paints its bg
+  ;; remove the row when the statusline is displayed on another line
+  (define native-y (- height 2))
+  (when (and (>= native-y 0) (not (= y native-y)))
+    (buffer/clear-with frame (area 0 native-y width 1) base-style))
   (buffer/clear-with frame (area 0 y width 1) base-style)
   (moka-draw-align! frame 0 y 'left base-style)
   (define center-width (moka-align-width 'center))
@@ -569,3 +577,15 @@
     (pop-last-component-by-name! "moka-bufferline")
     (set-editor-clip-top! 0)
     (set! *moka-bufferline-enabled?* #f)))
+
+;;@doc
+;; Number of rows the moka bufferline occupies at the top of the screen
+(define (moka-reserved-top)
+  (if (and *moka-bufferline-enabled?* (moka-bufferline-visible?))
+      (+ *moka-bufferline-row-offset* 1)
+      0))
+
+;;@doc
+;; Number of rows the moka statusline occupies at the bottom of the screen
+(define (moka-reserved-bottom)
+  (if *moka-enabled?* (max 1 *moka-row-offset*) 0))

@@ -6,7 +6,7 @@ You build sections out of segments, hand them to `moka-configure!`, and call `mo
 
 ```scheme
 (moka-configure!
- #:row-offset 2        ;; rows up from the bottom (bump it if the bar lands wrong)
+ #:row-offset 2        ;; rows up from the bottom: 2 sits on Helix's statusline row (default), 1 on the command line row
  #:transparent? #t     ;; #t blends with the terminal bg, #f uses the theme's statusline fill
  #:mode-normal "NOR"   ;; rename the mode labels if you want
  #:mode-insert "INS"
@@ -85,3 +85,12 @@ The `#:colors` hash sets fallbacks for segments you didn't style directly. Per-s
 ```
 
 `moka-buffer-style` takes the same `#:fg`, `#:bg` and `#:bubble?` as segments. `(moka-bufferline-disable!)` turns it off.
+
+## For other plugins
+
+Full-screen panels [forest.hx](https://github.com/Ra77a3l3-jar/forest.hx) can ask moka which rows the bars occupy and stay out of them:
+
+- `(moka-reserved-top)` — rows taken by the bufferline at the top (`0` when hidden or disabled)
+- `(moka-reserved-bottom)` — rows taken by the statusline at the bottom (`0` when disabled)
+
+Both are live lookups, so they track bufferline visibility (`'multiple` mode) as buffers open and close.
