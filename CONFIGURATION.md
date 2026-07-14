@@ -48,7 +48,17 @@ Heads up: `'mode` and `'git-branch` come with a background by default. If you wa
 | `'lsp` | attached LSP client name(s) (hidden if none) |
 | `'position` | `line:column` |
 | `'spacer` / `'separator` | a blank space / a `\|` |
+| `'file-absolute-path` | full path of the open file |
+| `'file-base-name` | filename without its extension |
+| `'file-modification-indicator` | `[+]` if the buffer has unsaved changes |
+| `'total-line-numbers` | total line count of the file |
+| `'file-type` | language name (`text` if none detected) |
+| `'selections` | `1 sel`, or `N/M sels` with multiple cursors |
+| `'primary-selection-length` | character count of the primary selection |
+| `'position-percentage` | cursor position as `%` through the file |
+| `'register` | selected register (`reg=x`), blank if none |
 
+Not built in: `diagnostics`/`workspace-diagnostics` (blocked on an unmerged upstream PR) and `spinner`/`file-encoding`/`file-line-ending`/`file-indent-style`/`read-only-indicator` (no Steel bindings exist for these yet). See `TODO.md`.
 
 ### Custom segments
 
@@ -57,6 +67,17 @@ Instead of a built-in name, pass your own zero-arg function returning a string:
 ```scheme
 (moka-segment (lambda () "hello") #:fg "#89b4fa")
 ```
+
+Want to reuse it by name across sections or configs instead? Register it with `moka-register-segment!`:
+
+```scheme
+(require "moka/moka.scm")
+
+(define (my-segment-content) "hello")
+(moka-register-segment! 'my-segment my-segment-content)
+```
+
+Then reference it like a built-in: `(moka-segment 'my-segment)`. Either way, the function can return a plain string, or a fragment list like `(list (cons "text" "#rrggbb") ...)` for per-piece colors (see `moka-file-content` in `moka.scm` for an example).
 
 ### Colors
 

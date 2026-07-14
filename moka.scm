@@ -5,6 +5,7 @@
 (require "helix/static.scm")
 (require "helix/commands.scm")
 (require "glyph/glyph.scm")
+(require-builtin helix/core/text as text.)
 
 (provide moka-segment
          moka-section
@@ -17,7 +18,11 @@
          moka-bufferline-enable!
          moka-bufferline-disable!
          moka-reserved-top
-         moka-reserved-bottom)
+         moka-reserved-bottom
+         moka-register-segment!
+         moka-current-path
+         moka-current-dirty?
+         moka-current-doc-id)
 
 (struct MokaSegment (content fg bg bubble? gap))
 (struct MokaSection (align segments gap))
@@ -205,6 +210,9 @@
 (define (moka-current-dirty?)
   (with-handler (lambda (_) #f) (editor-document-dirty? (editor->doc-id (editor-focus)))))
 
+(define (moka-current-doc-id)
+  (with-handler (lambda (_) #f) (editor->doc-id (editor-focus))))
+
 (define (moka-current-lsp-names)
   (with-handler (lambda (_) '()) (map lsp-client-name (get-active-lsp-clients))))
 
@@ -323,6 +331,81 @@
 (define (moka-spacer-content) " ")
 (define (moka-separator-content) "|")
 
+(define (moka-file-absolute-path-content)
+  (define path (moka-current-path))
+  (if path (string-append " " path " ") ""))
+
+(define (moka-last-index-of s ch)
+  (let loop ([i (- (string-length s) 1)])
+    (cond
+      [(< i 0) #f]
+      [(char=? (string-ref s i) ch) i]
+      [else (loop (- i 1))])))
+
+;; strips the extension, keeping dotfiles like .gitignore whole
+(define (moka-file-stem name)
+  (define dot (moka-last-index-of name #\.))
+  (if (and dot (> dot 0)) (substring name 0 dot) name))
+
+(define (moka-file-base-name-content)
+  (define path (moka-current-path))
+  (if path (string-append " " (moka-file-stem (file-name path)) " ") ""))
+
+(define (moka-file-modification-indicator-content)
+  (if (moka-current-dirty?) " [+] " ""))
+
+(define (moka-total-line-numbers-content)
+  (define doc (moka-current-doc-id))
+  (if (not doc)
+      ""
+      (let ([rope (with-handler (lambda (_) #f) (editor->text doc))])
+        (if rope
+            (string-append " " (number->string (text.rope-len-lines rope)) " ")
+            ""))))
+
+(define (moka-file-type-content)
+  (define doc (moka-current-doc-id))
+  (define lang (and doc (with-handler (lambda (_) #f) (editor-document->language doc))))
+  (if lang (string-append " " lang " ") " text "))
+
+(define (moka-selections-content)
+  (define sel (with-handler (lambda (_) #f) (current-selection-object)))
+  (if (not sel)
+      ""
+      (let ([count (length (selection->ranges sel))])
+        (if (= count 1)
+            " 1 sel "
+            (string-append " "
+                           (number->string (+ 1 (selection->primary-index sel)))
+                           "/"
+                           (number->string count)
+                           " sels ")))))
+
+(define (moka-primary-selection-length-content)
+  (define sel (with-handler (lambda (_) #f) (current-selection-object)))
+  (if (not sel)
+      ""
+      (let* ([primary (selection->primary-range sel)]
+             [len (- (range->to primary) (range->from primary))])
+        (string-append " " (number->string len) (if (= len 1) " char " " chars ")))))
+
+(define (moka-position-percentage-content)
+  (define doc (moka-current-doc-id))
+  (if (not doc)
+      ""
+      (let ([rope (with-handler (lambda (_) #f) (editor->text doc))])
+        (if (not rope)
+            ""
+            (let ([total (text.rope-len-lines rope)])
+              (if (<= total 0)
+                  ""
+                  (string-append (number->string (quotient (* (+ 1 (get-current-line-number)) 100) total))
+                                 "%")))))))
+
+(define (moka-register-content)
+  (define reg (with-handler (lambda (_) #f) (selected-register!)))
+  (if reg (string-append " reg=" (string reg) " ") ""))
+
 (define *moka-content-registry*
   (hash 'mode moka-mode-content
         'file moka-file-content
@@ -330,7 +413,20 @@
         'lsp moka-lsp-content
         'position moka-position-content
         'spacer moka-spacer-content
-        'separator moka-separator-content))
+        'separator moka-separator-content
+        'file-absolute-path moka-file-absolute-path-content
+        'file-base-name moka-file-base-name-content
+        'file-modification-indicator moka-file-modification-indicator-content
+        'total-line-numbers moka-total-line-numbers-content
+        'file-type moka-file-type-content
+        'selections moka-selections-content
+        'primary-selection-length moka-primary-selection-length-content
+        'position-percentage moka-position-percentage-content
+        'register moka-register-content))
+
+;; lets other .scm files add named segments, same as the built-ins above
+(define (moka-register-segment! key handler)
+  (set! *moka-content-registry* (hash-insert *moka-content-registry* key handler)))
 
 (define (moka-content-fragments segment)
   (define content (MokaSegment-content segment))
