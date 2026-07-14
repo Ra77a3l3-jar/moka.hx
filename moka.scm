@@ -57,17 +57,28 @@
 
 (define *moka-mode-labels* (hash 'normal "NOR" 'insert "INS" 'select "SEL"))
 
-(define (moka-mode-label)
+(define *moka-mode-colors* (hash))
+
+(define *moka-mode-scopes*
+  (hash 'normal "ui.statusline.normal"
+        'insert "ui.statusline.insert"
+        'select "ui.statusline.select"))
+
+(define (moka-mode-symbol)
   (cond
-    [(equal? (editor-mode) *moka-mode-insert*) (hash-try-get *moka-mode-labels* 'insert)]
-    [(equal? (editor-mode) *moka-mode-select*) (hash-try-get *moka-mode-labels* 'select)]
-    [else (hash-try-get *moka-mode-labels* 'normal)]))
+    [(equal? (editor-mode) *moka-mode-insert*) 'insert]
+    [(equal? (editor-mode) *moka-mode-select*) 'select]
+    [else 'normal]))
+
+(define (moka-mode-label)
+  (hash-try-get *moka-mode-labels* (moka-mode-symbol)))
 
 (define (moka-mode-scope)
-  (cond
-    [(equal? (editor-mode) *moka-mode-insert*) "ui.statusline.insert"]
-    [(equal? (editor-mode) *moka-mode-select*) "ui.statusline.select"]
-    [else "ui.statusline.normal"]))
+  (hash-try-get *moka-mode-scopes* (moka-mode-symbol)))
+
+(define (moka-mode-color key)
+  (define entry (hash-try-get *moka-mode-colors* (moka-mode-symbol)))
+  (and entry (hash-try-get entry key)))
 
 (define *moka-default-sections*
   (list (moka-section (list (moka-segment 'mode) (moka-segment 'file)) #:align 'left)
@@ -82,28 +93,34 @@
                           #:colors [colors *moka-default-colors*]
                           #:mode-normal [mode-normal "NOR"]
                           #:mode-insert [mode-insert "INS"]
-                          #:mode-select [mode-select "SEL"])
+                          #:mode-select [mode-select "SEL"]
+                          #:mode-colors [mode-colors (hash)])
   (set! *moka-row-offset* row-offset)
   (set! *moka-transparent?* transparent?)
   (set! *moka-sections* sections)
   (set! *moka-colors* colors)
-  (set! *moka-mode-labels* (hash 'normal mode-normal 'insert mode-insert 'select mode-select)))
+  (set! *moka-mode-labels* (hash 'normal mode-normal 'insert mode-insert 'select mode-select))
+  (set! *moka-mode-colors* mode-colors))
 
 (define (moka-base-style)
   (if *moka-transparent?* (theme-scope-ref "ui.background") (theme-scope-ref "ui.statusline")))
 
-;; 'mode prefers theme colors over the hash
+;; 'mode prefers #:mode-colors, then theme colors, then the fallback hash
 (define (moka-default-bg content)
   (cond
     [(equal? content 'mode)
-     (or (style->bg (theme-scope-ref (moka-mode-scope))) (hash-try-get *moka-colors* 'mode-fallback-bg))]
+     (or (moka-mode-color 'bg)
+         (style->bg (theme-scope-ref (moka-mode-scope)))
+         (hash-try-get *moka-colors* 'mode-fallback-bg))]
     [(equal? content 'git-branch) (hash-try-get *moka-colors* 'git-branch-bg)]
     [else #f]))
 
 (define (moka-default-fg content)
   (cond
     [(equal? content 'mode)
-     (or (style->fg (theme-scope-ref (moka-mode-scope))) (hash-try-get *moka-colors* 'mode-fallback-fg))]
+     (or (moka-mode-color 'fg)
+         (style->fg (theme-scope-ref (moka-mode-scope)))
+         (hash-try-get *moka-colors* 'mode-fallback-fg))]
     [(equal? content 'git-branch) (hash-try-get *moka-colors* 'git-branch-fg)]
     [(equal? content 'lsp) (hash-try-get *moka-colors* 'lsp)]
     [(equal? content 'position) (hash-try-get *moka-colors* 'position)]

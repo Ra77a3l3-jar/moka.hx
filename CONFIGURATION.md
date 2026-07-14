@@ -11,6 +11,7 @@ You build sections out of segments, hand them to `moka-configure!`, and call `mo
  #:mode-normal "NOR"   ;; rename the mode labels if you want
  #:mode-insert "INS"
  #:mode-select "SEL"
+ #:mode-colors (hash ...) ;; per-mode colors for the mode segment
  #:sections (list ...) ;; the actual content, see below
  #:colors (hash ...))  ;; fallback colors, see below
 
@@ -65,6 +66,17 @@ The `#:colors` hash sets fallbacks for segments you didn't style directly. Per-s
 (hash 'mode-fallback-bg "#585b70" 'mode-fallback-fg "#1e1e2e"
       'git-branch-bg "#a6e3a1" 'git-branch-fg "#1e1e2e"
       'lsp "#89b4fa" 'position "#cba6f7" 'dirty "#f9e2af")
+```
+
+### Per-mode colors
+
+By default the `'mode` pill takes its colors from the theme (`ui.statusline.normal` / `.insert` / `.select`). `#:mode-colors` overrides that per mode:
+
+```scheme
+(moka-configure!
+ #:mode-colors (hash 'normal (hash 'bg "#89b4fa" 'fg "#1e1e2e")
+                     'insert (hash 'bg "#a6e3a1" 'fg "#1e1e2e")
+                     'select (hash 'bg "#cba6f7" 'fg "#1e1e2e")))
 ```
 
 ## Bufferline
