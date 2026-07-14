@@ -119,6 +119,19 @@ By default the `'mode` pill takes its colors from the theme (`ui.statusline.norm
 
 `moka-buffer-style` takes the same `#:fg`, `#:bg` and `#:bubble?` as segments. `(moka-bufferline-disable!)` turns it off.
 
+### Reordering tabs
+
+`(moka-bufferline-move-left!)` and `(moka-bufferline-move-right!)` swap the focused tab with its neighbor. Bind them to whatever keys you like:
+
+```scheme
+(keymap (global)
+  (normal
+    (space
+      (b
+        (h ":moka-bufferline-move-left!")
+        (l ":moka-bufferline-move-right!")))))
+```
+
 ## For other plugins
 
 Full-screen panels [forest.hx](https://github.com/Ra77a3l3-jar/forest.hx) can ask moka which rows the bars occupy and stay out of them:

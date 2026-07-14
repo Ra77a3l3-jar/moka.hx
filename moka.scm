@@ -22,7 +22,9 @@
          moka-register-segment!
          moka-current-path
          moka-current-dirty?
-         moka-current-doc-id)
+         moka-current-doc-id
+         moka-bufferline-move-left!
+         moka-bufferline-move-right!)
 
 (struct MokaSegment (content fg bg bubble? gap))
 (struct MokaSection (align segments gap))
@@ -605,8 +607,55 @@
   (define dirty-frag (if dirty? (list (cons " " #f) (cons "*" *moka-bufferline-dirty-color*)) '()))
   (append icon-frag (list (cons name #f)) dirty-frag))
 
+;; user-set tab order, synced against the live doc set on every render
+(define *moka-bufferline-order* '())
+
+(define (moka-bufferline-list-contains? lst x)
+  (cond
+    [(null? lst) #f]
+    [(equal? (car lst) x) #t]
+    [else (moka-bufferline-list-contains? (cdr lst) x)]))
+
+(define (moka-bufferline-sync-order!)
+  (define live (with-handler (lambda (_) '()) (editor-all-documents)))
+  (define still-open (filter (lambda (d) (moka-bufferline-list-contains? live d)) *moka-bufferline-order*))
+  (define new-docs (filter (lambda (d) (not (moka-bufferline-list-contains? still-open d))) live))
+  (set! *moka-bufferline-order* (append still-open new-docs)))
+
 (define (moka-bufferline-docs)
-  (with-handler (lambda (_) '()) (editor-all-documents)))
+  (moka-bufferline-sync-order!)
+  *moka-bufferline-order*)
+
+(define (moka-bufferline-index-of lst target)
+  (let loop ([xs lst] [i 0])
+    (cond
+      [(null? xs) #f]
+      [(equal? (car xs) target) i]
+      [else (loop (cdr xs) (+ i 1))])))
+
+(define (moka-bufferline-swap-indices lst i j)
+  (define a (list-ref lst i))
+  (define b (list-ref lst j))
+  (let loop ([xs lst] [k 0] [acc '()])
+    (cond
+      [(null? xs) (reverse acc)]
+      [(= k i) (loop (cdr xs) (+ k 1) (cons b acc))]
+      [(= k j) (loop (cdr xs) (+ k 1) (cons a acc))]
+      [else (loop (cdr xs) (+ k 1) (cons (car xs) acc))])))
+
+;; swaps the focused buffer's tab with its left (-1) or right (+1) neighbor
+(define (moka-bufferline-move! delta)
+  (define focused (moka-current-doc-id))
+  (when focused
+    (define order (moka-bufferline-docs))
+    (define i (moka-bufferline-index-of order focused))
+    (define j (and i (+ i delta)))
+    (when (and i j (>= j 0) (< j (length order)))
+      (set! *moka-bufferline-order* (moka-bufferline-swap-indices order i j))
+      (redraw))))
+
+(define (moka-bufferline-move-left!) (moka-bufferline-move! -1))
+(define (moka-bufferline-move-right!) (moka-bufferline-move! 1))
 
 (define (moka-bufferline-focused-doc-id)
   (with-handler (lambda (_) #f) (editor->doc-id (editor-focus))))
