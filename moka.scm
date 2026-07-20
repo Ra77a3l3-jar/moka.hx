@@ -408,6 +408,35 @@
   (define reg (with-handler (lambda (_) #f) (selected-register!)))
   (if reg (string-append " reg=" (string reg) " ") ""))
 
+(define (moka-diagnostics-content)
+  (define doc (moka-current-doc-id))
+  (if (not doc)
+      ""
+      (let ([counts (with-handler (lambda (_) #f) (helix.editor-document-diagnostic-counts doc))])
+        (if (not counts)
+            ""
+            (let ([errors (list-ref counts 3)]
+                  [warnings (list-ref counts 2)]
+                  [info (list-ref counts 1)]
+                  [hints (list-ref counts 0)])
+              (let loop ([entries (list (list errors 'error)
+                                       (list warnings 'alert)
+                                       (list info 'information)
+                                       (list hints 'check))]
+                         [frags '()])
+                (if (null? entries)
+                    (if (null? frags) "" frags)
+                    (let* ([entry (car entries)]
+                           [count (list-ref entry 0)]
+                           [icon-key (list-ref entry 1)])
+                      (if (= count 0)
+                          (loop (cdr entries) frags)
+                          (let* ([color (glyph-ui-color icon-key)]
+                                 [text (string-append (glyph-ui-icon icon-key) " " (number->string count))]
+                                 [sep (if (null? frags) '() (list (cons " " #f)))]
+                                 [new-frags (append frags sep (list (cons text color)))])
+                            (loop (cdr entries) new-frags))))))))))
+
 (define *moka-content-registry*
   (hash 'mode moka-mode-content
         'file moka-file-content
@@ -424,7 +453,8 @@
         'selections moka-selections-content
         'primary-selection-length moka-primary-selection-length-content
         'position-percentage moka-position-percentage-content
-        'register moka-register-content))
+        'register moka-register-content
+        'diagnostics moka-diagnostics-content))
 
 ;; lets other .scm files add named segments, same as the built-ins above
 (define (moka-register-segment! key handler)
