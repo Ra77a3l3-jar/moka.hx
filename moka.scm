@@ -435,7 +435,7 @@
                                  [text (string-append (glyph-ui-icon icon-key) " " (number->string count))]
                                  [sep (if (null? frags) '() (list (cons " " #f)))]
                                  [new-frags (append frags sep (list (cons text color)))])
-                            (loop (cdr entries) new-frags))))))))))
+                            (loop (cdr entries) new-frags)))))))))))
 
 (define *moka-content-registry*
   (hash 'mode moka-mode-content
