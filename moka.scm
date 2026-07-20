@@ -412,7 +412,7 @@
   (define doc (moka-current-doc-id))
   (if (not doc)
       ""
-      (let ([counts (with-handler (lambda (_) #f) (helix.editor-document-diagnostic-counts doc))])
+      (let ([counts (with-handler (lambda (_) #f) (editor-document-diagnostic-counts doc))])
         (if (not counts)
             ""
             (let ([errors (list-ref counts 3)]
