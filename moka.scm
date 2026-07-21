@@ -26,11 +26,11 @@
          moka-bufferline-move-left!
          moka-bufferline-move-right!)
 
-(struct MokaSegment (content fg bg bubble? gap))
+(struct MokaSegment (content fg bg bubble? gap colored-icons?))
 (struct MokaSection (align segments gap))
 
-(define (moka-segment content #:fg [fg 'auto] #:bg [bg 'auto] #:bubble? [bubble? 'auto] #:gap [gap 2])
-  (MokaSegment content fg bg bubble? gap))
+(define (moka-segment content #:fg [fg 'auto] #:bg [bg 'auto] #:bubble? [bubble? 'auto] #:gap [gap 2] #:colored-icons? [colored-icons? 'auto])
+  (MokaSegment content fg bg bubble? gap colored-icons?))
 
 (define (moka-section segments #:align [align 'left] #:gap [gap 2])
   (MokaSection align segments gap))
@@ -147,11 +147,11 @@
     [(equal? bubble? 'angled) (cons *moka-angle-left* *moka-angle-right*)]
     [else #f]))
 
-(define (moka-runs-for fragments bg fallback-fg)
+(define (moka-runs-for fragments bg fallback-fg colored?)
   (define fg (or fallback-fg (and bg "#1e1e2e")))
-  (if bg
-      (map (lambda (frag) (cons (car frag) fg)) fragments)
-      (map (lambda (frag) (cons (car frag) (or (cdr frag) fg))) fragments)))
+  (if colored?
+      (map (lambda (frag) (cons (car frag) (or (cdr frag) fg))) fragments)
+      (map (lambda (frag) (cons (car frag) fg)) fragments)))
 
 (define (moka-fragments-text fragments)
   (string-join (map car fragments) ""))
@@ -163,7 +163,7 @@
   (+ (string-length (moka-fragments-text (moka-pad-fragments fragments bg)))
      (if (moka-caps-for bg bubble?) 2 0)))
 
-(define (moka-draw-styled! frame x y fragments bg bubble? fallback-fg base-style)
+(define (moka-draw-styled! frame x y fragments bg bubble? fallback-fg colored? base-style)
   (define bg-style (if bg (style-bg base-style (moka-to-color bg)) base-style))
   (define caps (moka-caps-for bg bubble?))
   (define cap-style (if bg (style-fg base-style (moka-to-color bg)) base-style))
@@ -174,7 +174,7 @@
           (+ x 1))
         x))
   (define end-x
-    (let loop ([runs (moka-runs-for (moka-pad-fragments fragments bg) bg fallback-fg)] [cx start-x])
+    (let loop ([runs (moka-runs-for (moka-pad-fragments fragments bg) bg fallback-fg colored?)] [cx start-x])
       (if (null? runs)
           cx
           (let* ([run (car runs)]
@@ -204,6 +204,10 @@
 
 (define (moka-segment-bubble? segment)
   (moka-resolve (MokaSegment-bubble? segment) (lambda () (moka-default-bubble? (MokaSegment-content segment)))))
+
+;; auto makes icon colored only on transparent background else have fg color
+(define (moka-segment-colored-icons? segment bg)
+  (moka-resolve (MokaSegment-colored-icons? segment) (lambda () (not bg))))
 
 ;; read live, no caching
 (define (moka-current-path)
@@ -408,6 +412,35 @@
   (define reg (with-handler (lambda (_) #f) (selected-register!)))
   (if reg (string-append " reg=" (string reg) " ") ""))
 
+(define (moka-diagnostics-content)
+  (define doc (moka-current-doc-id))
+  (if (not doc)
+      ""
+      (let ([counts (with-handler (lambda (_) #f) (editor-document-diagnostic-counts doc))])
+        (if (not counts)
+            ""
+            (let ([errors (list-ref counts 3)]
+                  [warnings (list-ref counts 2)]
+                  [info (list-ref counts 1)]
+                  [hints (list-ref counts 0)])
+              (let loop ([entries (list (list errors 'error)
+                                       (list warnings 'alert)
+                                       (list info 'information)
+                                       (list hints 'check))]
+                         [frags '()])
+                (if (null? entries)
+                    (if (null? frags) "" frags)
+                    (let* ([entry (car entries)]
+                           [count (list-ref entry 0)]
+                           [icon-key (list-ref entry 1)])
+                      (if (= count 0)
+                          (loop (cdr entries) frags)
+                          (let* ([color (glyph-ui-color icon-key)]
+                                 [text (string-append (glyph-ui-icon icon-key) " " (number->string count))]
+                                 [sep (if (null? frags) '() (list (cons " " #f)))]
+                                 [new-frags (append frags sep (list (cons text color)))])
+                            (loop (cdr entries) new-frags)))))))))))
+
 (define *moka-content-registry*
   (hash 'mode moka-mode-content
         'file moka-file-content
@@ -424,7 +457,8 @@
         'selections moka-selections-content
         'primary-selection-length moka-primary-selection-length-content
         'position-percentage moka-position-percentage-content
-        'register moka-register-content))
+        'register moka-register-content
+        'diagnostics moka-diagnostics-content))
 
 ;; lets other .scm files add named segments, same as the built-ins above
 (define (moka-register-segment! key handler)
@@ -473,13 +507,15 @@
   (moka-sum-with-gaps (moka-sections-nonempty align) moka-section-width MokaSection-gap))
 
 (define (moka-draw-segment! frame x y segment base-style)
+  (define bg (moka-segment-bg segment))
   (moka-draw-styled! frame
                       x
                       y
                       (moka-content-fragments segment)
-                      (moka-segment-bg segment)
+                      bg
                       (moka-segment-bubble? segment)
                       (moka-segment-fallback-fg segment)
+                      (moka-segment-colored-icons? segment bg)
                       base-style))
 
 (define (moka-draw-section! frame x y section base-style)
@@ -559,6 +595,7 @@
 (define *moka-bufferline-row-offset* 0)
 (define *moka-bufferline-gap* 1)
 (define *moka-bufferline-show-icons?* #t)
+(define *moka-bufferline-colored-icons?* 'auto)
 (define *moka-bufferline-show-dirty?* #t)
 (define *moka-bufferline-dirty-color* "#f9e2af")
 (define *moka-bufferline-clickable?* #t)
@@ -576,6 +613,7 @@
                                      #:inactive [inactive (moka-buffer-style)]
                                      #:gap [gap 1]
                                      #:icons? [icons? #t]
+                                     #:colored-icons? [colored-icons? 'auto]
                                      #:dirty? [dirty? #t]
                                      #:dirty-color [dirty-color "#f9e2af"]
                                      #:clickable? [clickable? #t])
@@ -585,12 +623,17 @@
   (set! *moka-bufferline-inactive-style* inactive)
   (set! *moka-bufferline-gap* gap)
   (set! *moka-bufferline-show-icons?* icons?)
+  (set! *moka-bufferline-colored-icons?* colored-icons?)
   (set! *moka-bufferline-show-dirty?* dirty?)
   (set! *moka-bufferline-dirty-color* dirty-color)
   (set! *moka-bufferline-clickable?* clickable?))
 
 (define (moka-bufferline-style-for active?)
   (if active? *moka-bufferline-active-style* *moka-bufferline-inactive-style*))
+
+;; 'auto keeps icon colors only on tabs without a bg, same rule as the statusline
+(define (moka-bufferline-tab-colored-icons? bg)
+  (moka-resolve *moka-bufferline-colored-icons?* (lambda () (not bg))))
 
 (define (moka-bufferline-tab-bg style) (moka-resolve (MokaBufferStyle-bg style) (lambda () #f)))
 (define (moka-bufferline-tab-fg style) (moka-resolve (MokaBufferStyle-fg style) (lambda () #f)))
@@ -685,14 +728,16 @@
                  [style (moka-bufferline-style-for (equal? doc-id focused))]
                  [fragments (moka-bufferline-doc-fragments doc-id)]
                  [start-x cx]
+                 [tab-bg (moka-bufferline-tab-bg style)]
                  [end-x
                   (moka-draw-styled! frame
                                       cx
                                       y
                                       fragments
-                                      (moka-bufferline-tab-bg style)
+                                      tab-bg
                                       (moka-bufferline-tab-bubble? style)
                                       (moka-bufferline-tab-fg style)
+                                      (moka-bufferline-tab-colored-icons? tab-bg)
                                       base-style)])
             (loop (cdr docs) (+ end-x *moka-bufferline-gap*) (cons (list doc-id start-x end-x) tabs)))))))
 

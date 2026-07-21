@@ -36,6 +36,14 @@ Everything is optional. `(moka-configure!)` alone gives you the default bar. Cal
 
 `#:fg` is the text color, `#:bg` is the fill (`#f` means none). `#:bubble?` picks the shape when there's a fill: `#t` round pill, `'angled` sharp powerline caps, `#f` flat block. `#:gap` is the spaces before the next segment (`0` means touching).
 
+Some segments carry their own colors in the content: the file icon, the git status icons, the diagnostics icons. `#:colored-icons?` decides whether those colors survive:
+
+```scheme
+(moka-segment 'file #:bg "#222222" #:bubble? #t #:colored-icons? #t)
+```
+
+With `'auto` (the default) the content colors show only on segments without a fill, a `#:bg` repaints everything in the segment `#:fg`. Pass `#t` to keep the content colors even inside a fill, or `#f` to always use the plain `#:fg`.
+
 Heads up: `'mode` and `'git-branch` come with a background by default. If you want them as plain text, pass `#:bg #f` along with your `#:fg`.
 
 ### Built-in segments
@@ -58,7 +66,7 @@ Heads up: `'mode` and `'git-branch` come with a background by default. If you wa
 | `'position-percentage` | cursor position as `%` through the file |
 | `'register` | selected register (`reg=x`), blank if none |
 
-Not built in: `diagnostics`/`workspace-diagnostics` (blocked on an unmerged upstream PR) and `spinner`/`file-encoding`/`file-line-ending`/`file-indent-style`/`read-only-indicator` (no Steel bindings exist for these yet). See `TODO.md`.
+Not built in: `workspace-diagnostics` and `spinner`/`file-encoding`/`file-line-ending`/`file-indent-style`/`read-only-indicator` (no Steel bindings exist for these yet).
 
 ### Custom segments
 
@@ -109,6 +117,7 @@ By default the `'mode` pill takes its colors from the theme (`ui.statusline.norm
  #:mode 'multiple      ;; like Helix's own setting: 'never / 'always / 'multiple
  #:gap 1               ;; spacing between tabs
  #:icons? #t           ;; file icons in tabs
+ #:colored-icons? 'auto ;; icon colors inside filled tabs: 'auto / #t / #f
  #:dirty? #t           ;; mark unsaved buffers
  #:dirty-color "#f9e2af"
  #:clickable? #t       ;; click a tab to switch to it
@@ -118,6 +127,8 @@ By default the `'mode` pill takes its colors from the theme (`ui.statusline.norm
 ```
 
 `moka-buffer-style` takes the same `#:fg`, `#:bg` and `#:bubble?` as segments. `(moka-bufferline-disable!)` turns it off.
+
+`#:colored-icons?` works like the segment option: with `'auto` icons keep their colors only on tabs without a fill (so the active bubble repaints them, inactive tabs stay colored), `#t` keeps them colored everywhere, `#f` never colors them.
 
 ### Reordering tabs
 
